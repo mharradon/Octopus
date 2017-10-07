@@ -1,10 +1,15 @@
-from keras.models import Model
+from collections import OrderedDict
+
+import numpy as np
 from box import Box
+
+from keras.models import Model as _Model
 from keras.layers import Input, Embedding, Dense
 from keras.layers.merge import Concatenate
-from utils import build_ser_deser,LossLayer
 from keras.engine.topology import Layer
-from collections import OrderedDict
+import keras.backend as K
+from keras.callbacks import ModelCheckpoint
+from keras.layers.core import Lambda
 
 def build_ser_deser(example):
   # Return funcs that given dict of dict x return a list in a fixed order and a func that takes flat list and returns dict
@@ -55,15 +60,15 @@ class LossLayer(Layer):
     return self.loss_func(x)
 
   def compute_output_shape(self, input_shape):
-    return [(input_shape[0],1)]*self.loss_size
+    return [[input_shape[0],1]]*self.loss_size
 
-def my_model(inputs,outputs,ys,loss_func,**kwargs):
+def Model(inputs,outputs,ys,loss_func,**kwargs):
   in_ser,in_deser = build_ser_deser(inputs)
   out_ser,out_deser = build_ser_deser(outputs)
   y_ser,y_deser = build_ser_deser(ys)
 
   # Build input layers
-  ys = y_deser([Input(y) for y in y_ser(ys)])
+  ys = y_deser([Input(y) if isinstance(y,tuple) else y for y in y_ser(ys)])
 
   inputs_ser = in_ser(inputs)
   outputs_ser = out_ser(outputs)
@@ -76,12 +81,13 @@ def my_model(inputs,outputs,ys,loss_func,**kwargs):
     return loss_ser(loss_func(out_deser(args[:len(outputs_ser)]),y_deser(args[len(outputs_ser):])))
   loss_size = len(loss_skeleton.keys())
 
-  losses_ser = LossLayer(_loss_func,loss_size=loss_size)(outputs_ser + ys_ser)
+  losses_ser = LossLayer(_loss_func,loss_size=loss_size,name='loss')(outputs_ser + ys_ser)
   if not isinstance(losses_ser,list):
     losses_ser = [losses_ser]
-
-  train_model = Model(inputs=inputs_ser + ys_ser,outputs=outputs_ser + losses_ser,**kwargs)
-  test_model = Model(inputs=inputs_ser,outputs=outputs_ser,**kwargs)
+  losses_ser = [Lambda(lambda x: x, name=k)(l) for l,k in zip(losses_ser,loss_skeleton.keys())]
+  
+  train_model = _Model(inputs=inputs_ser + ys_ser,outputs=outputs_ser + losses_ser,**kwargs)
+  test_model = _Model(inputs=inputs_ser,outputs=outputs_ser,**kwargs)
 
   return Box({'train_model': train_model,
               'test_model': test_model,
@@ -93,7 +99,7 @@ def my_model(inputs,outputs,ys,loss_func,**kwargs):
               'losses_ser': losses_ser,
               'loss_deser': loss_deser})
 
-def my_compile(my_model,optimizer,**kwargs):
+def Compile(my_model,optimizer,**kwargs):
   #losses = {l.name: (lambda y_true,y_pred: y_true) for l in my_model.losses_ser}
   losses = [lambda y_true,y_pred: K.zeros_like(y_pred)*y_pred for l in my_model.outputs_ser] + \
            [(lambda y_true,y_pred: y_pred) for l in my_model.losses_ser]
@@ -104,7 +110,7 @@ def my_compile(my_model,optimizer,**kwargs):
                               loss='mean_squared_error', # Shouldn't matter
                               **kwargs)
 
-def my_fit_generator(my_model,generator,**kwargs):
+def fit_generator(my_model,generator,**kwargs):
   def my_generator():
     _x,_y = next(generator)
     x_ser,x_deser = build_ser_deser(_x)
@@ -112,16 +118,14 @@ def my_fit_generator(my_model,generator,**kwargs):
     while True:
       _x,_y = next(generator)
       x = x_ser(_x) + y_ser(_y)
-      y = [np.zeros(x[0].shape[0]) for _ in x]
+      y = [np.zeros((x[0].shape[0],)+(1,)*(len(o.shape)-1)) for o in my_model.outputs_ser] + \
+          [np.zeros((x[0].shape[0],)+(1,)*(len(l.shape)-1)) for l in my_model.losses_ser]
       yield (x,y)
 
   next(my_generator())
   return my_model.train_model.fit_generator(my_generator(),**kwargs)
 
 if __name__=="__main__":
-  import keras.backend as K
-  import numpy as np
-
   test_shape = (10,)
 
   inp0 = Input(shape=test_shape)
