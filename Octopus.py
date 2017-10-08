@@ -92,6 +92,8 @@ def Model(inputs,outputs,ys,loss_func,**kwargs):
   return Box({'train_model': train_model,
               'test_model': test_model,
               'inputs': inputs,
+              'in_ser':in_ser,
+              'out_deser':out_deser,
               'outputs': outputs,
               'outputs_ser': outputs_ser,
               'ys': ys,
@@ -110,20 +112,26 @@ def Compile(my_model,optimizer,**kwargs):
                               loss='mean_squared_error', # Shouldn't matter
                               **kwargs)
 
+def Predict(my_model,x):
+  return my_model.out_deser(my_model.test_model.predict(my_model.in_ser(x)))
+
 def fit_generator(my_model,generator,**kwargs):
-  def my_generator():
-    _x,_y = next(generator)
+  def oct_generator(g):
+    _x,_y = next(g)
     x_ser,x_deser = build_ser_deser(_x)
     y_ser,y_deser = build_ser_deser(_y)
     while True:
-      _x,_y = next(generator)
       x = x_ser(_x) + y_ser(_y)
       y = [np.zeros((x[0].shape[0],)+(1,)*(len(o.shape)-1)) for o in my_model.outputs_ser] + \
           [np.zeros((x[0].shape[0],)+(1,)*(len(l.shape)-1)) for l in my_model.losses_ser]
+      _x,_y = next(g)
       yield (x,y)
 
-  next(my_generator())
-  return my_model.train_model.fit_generator(my_generator(),**kwargs)
+  if 'validation_data' in kwargs:
+    kwargs['validation_data'] = oct_generator(kwargs['validation_data'])
+
+  return my_model.train_model.fit_generator(oct_generator(generator),**kwargs)
+
 
 if __name__=="__main__":
   test_shape = (10,)
