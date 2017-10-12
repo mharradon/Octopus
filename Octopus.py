@@ -27,7 +27,7 @@ def build_ser_deser(example):
     return result
 
   def deser(x):
-    result = example.__class__()
+    result = Box(OrderedDict()) 
     for k in x_map.keys():
       ks = list(k)
       sub = result
@@ -84,9 +84,9 @@ def Model(inputs,outputs,ys,loss_func,**kwargs):
   losses_ser = LossLayer(_loss_func,loss_size=loss_size,name='loss')(outputs_ser + ys_ser)
   if not isinstance(losses_ser,list):
     losses_ser = [losses_ser]
-  losses_ser = [Lambda(lambda x: x, name=k)(l) for l,k in zip(losses_ser,loss_skeleton.keys())]
+  losses_ser = [Lambda(lambda x: x, name=k)(l) for l,k in zip(losses_ser,loss_ser(OrderedDict([(k,k) for k in loss_skeleton.keys()])))]
   
-  train_model = _Model(inputs=inputs_ser + ys_ser,outputs=outputs_ser + losses_ser,**kwargs)
+  train_model = _Model(inputs=inputs_ser + ys_ser,outputs=losses_ser,**kwargs)
   test_model = _Model(inputs=inputs_ser,outputs=outputs_ser,**kwargs)
 
   return Box({'train_model': train_model,
@@ -102,9 +102,8 @@ def Model(inputs,outputs,ys,loss_func,**kwargs):
               'loss_deser': loss_deser})
 
 def Compile(my_model,optimizer,**kwargs):
-  #losses = {l.name: (lambda y_true,y_pred: y_true) for l in my_model.losses_ser}
-  losses = [lambda y_true,y_pred: K.zeros_like(y_pred)*y_pred for l in my_model.outputs_ser] + \
-           [(lambda y_true,y_pred: y_pred) for l in my_model.losses_ser]
+  #losses = {l.name.split('/')[0]: (lambda y_true,y_pred: y_true) for l in my_model.losses_ser}
+  losses = [lambda y_true,y_pred: y_pred for l in my_model.losses_ser]
   my_model.train_model.compile(optimizer,
                                loss=losses,
                                **kwargs)
@@ -122,8 +121,7 @@ def fit_generator(my_model,generator,**kwargs):
     y_ser,y_deser = build_ser_deser(_y)
     while True:
       x = x_ser(_x) + y_ser(_y)
-      y = [np.zeros((x[0].shape[0],)+(1,)*(len(o.shape)-1)) for o in my_model.outputs_ser] + \
-          [np.zeros((x[0].shape[0],)+(1,)*(len(l.shape)-1)) for l in my_model.losses_ser]
+      y = [np.zeros((x[0].shape[0],)+(1,)*(len(l.shape)-1)) for l in my_model.losses_ser]
       _x,_y = next(g)
       yield (x,y)
 
@@ -131,7 +129,6 @@ def fit_generator(my_model,generator,**kwargs):
     kwargs['validation_data'] = oct_generator(kwargs['validation_data'])
 
   return my_model.train_model.fit_generator(oct_generator(generator),**kwargs)
-
 
 if __name__=="__main__":
   test_shape = (10,)
@@ -147,10 +144,11 @@ if __name__=="__main__":
     # Use callable functions to allow calling without arguments 
     # and inferring count of return parameters
     loss = {'loss0': lambda: (outputs['y']-ys['y_true'])**2,
-            'loss1': lambda: K.zeros_like(outputs['y'])*outputs['y']}
-
+            'loss1': lambda: K.zeros_like(outputs['y'])*outputs['y'],
+            'loss3': lambda: 0.1*K.ones_like(outputs['y'])}
+    
     if not dummy: 
-      loss = {k:v() for k,v in loss.items()}
+      loss = OrderedDict([(k,v()) for k,v in loss.items()])
     
     return loss
 
@@ -159,9 +157,9 @@ if __name__=="__main__":
       x0 = np.random.randn(64,test_shape[0])
       x1 = np.random.randn(64,test_shape[0])
       y = x0[:,0]*2 + x1[:,1]*3 + 1
-      yield {'inp0':x0,'inp1':x1},{'y_true':y}
+      yield {'inp0':x0,'inp1':x1},{'y_true':y,'y_fake':y+1}
 
   next(my_gen())
-  model = my_model(inputs={'inp0':inp0,'inp1':inp1},outputs={'y':y_out},ys={'y_true':(1,)},loss_func=loss_func)
-  my_compile(model,'rmsprop') 
-  my_fit_generator(model,my_gen(),verbose=2,steps_per_epoch=100,epochs=100)
+  model = Model(inputs={'inp0':inp0,'inp1':inp1},outputs={'inp0':inp0,'y':y_out},ys={'y_true':(1,),'y_fake':(1,)},loss_func=loss_func)
+  Compile(model,'rmsprop') 
+  fit_generator(model,my_gen(),verbose=2,steps_per_epoch=100,epochs=100)
