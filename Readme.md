@@ -5,7 +5,7 @@ Keras makes a lot of things easy, but its loss and optimization interfaces are f
   model.compile(self,optimizer,losses=[l1,l2])
 ```
 
-Here the effective total loss is l1(o1)+l2(o2). This precludes any combination other than additive between the loss outputs. It also implies that each output has an associated y_true and loss, which is not generally the case.
+Here the effective total loss is l1(i1,o1)+l2(i2,o2). This precludes any combination other than additive between the loss outputs. It also implies that each output has an associated y_true and loss, which is not generally the case.
 
 A more flexible interface would be:
 
