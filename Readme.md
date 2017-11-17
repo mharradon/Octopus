@@ -1,3 +1,5 @@
+NB: This implementation is very janky / a work in progress.
+
 Keras makes a lot of things easy, but its loss and optimization interfaces are fairly restrictive:
 
 ```
